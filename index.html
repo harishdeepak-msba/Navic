@@ -37,6 +37,7 @@ button:disabled{opacity:.45;cursor:default}
 .btns label{color:var(--mute);font-size:14px;display:flex;gap:4px;align-items:center}
 select{padding:8px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--ink);font:inherit}
 #src{color:var(--mute);font-size:13px;margin-top:8px}
+#sats{color:var(--mute);font-size:13px;margin-top:4px}
 </style>
 </head>
 <body>
@@ -73,6 +74,7 @@ select{padding:8px;border:1px solid var(--line);border-radius:6px;background:var
     <label><input type="checkbox" id="voice" checked> Voice</label>
   </div>
   <div id="src">Position: waiting</div>
+  <div id="sats">Satellites: shown in the Android app</div>
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
@@ -196,6 +198,27 @@ function startDevice() {
     e => { $('src').textContent = 'Position: ' + e.message + '. Set From by search or by tapping the map.'; },
     { enableHighAccuracy: true, maximumAge: 1000, timeout: 20000 }
   );
+}
+
+
+// ---------- satellites (Android app only) ----------
+const CONST = { 1: 'GPS', 2: 'SBAS', 3: 'GLONASS', 4: 'QZSS', 5: 'BeiDou', 6: 'Galileo', 7: 'NavIC' };
+function startSats() {
+  const c = NATIVE();
+  if (!c) return;
+  $('sats').textContent = 'Satellites: starting';
+  const show = d => {
+    if (!d || !d.sats) { $('sats').textContent = 'Satellites: listening, no data yet'; return; }
+    const n = {};
+    d.sats.forEach(s => { const k = CONST[s.constellation] || 'Other'; n[k] = (n[k] || 0) + 1; });
+    const parts = Object.keys(n).map(k => k + ' ' + n[k]).join(', ');
+    $('sats').textContent = 'NavIC: ' + d.navicSeen + ' seen, ' + d.navicUsed + ' used in fix. All: ' + d.total + ' seen, ' + d.used + ' used (' + parts + ')';
+  };
+  c.nativePromise('NavicGnss', 'start', {})
+    .then(() => setInterval(() => {
+      c.nativePromise('NavicGnss', 'getStatus', {}).then(r => show(r && r.status)).catch(() => {});
+    }, 1500))
+    .catch(e => { $('sats').textContent = 'Satellites error: ' + (e && e.message ? e.message : JSON.stringify(e)); });
 }
 
 // ---------- search ----------
@@ -484,6 +507,7 @@ map.on('click', e => { $('results').hidden = true; setPoint(S.pick, e.latlng.lat
 map.on('contextmenu', e => setPoint('from', e.latlng.lat, e.latlng.lng));
 markPick();
 startDevice();
+startSats();
 </script>
 </body>
 </html>
