@@ -1,0 +1,489 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>NavIC Navigator</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+:root{--bg:#fff;--card:#fff;--ink:#1c1b18;--mute:#6b675d;--line:#ddd8cb;--accent:#b97d00}
+@media (prefers-color-scheme:dark){:root{--bg:#14130f;--card:#1f1d17;--ink:#f1eee4;--mute:#a39e8f;--line:#37342a;--accent:#e6a700}}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{display:flex;flex-direction:column;background:var(--bg);color:var(--ink);font:16px/1.4 system-ui,sans-serif}
+#top{position:relative;display:flex;flex-direction:column;gap:6px;padding:8px;border-bottom:1px solid var(--line)}
+.fld{display:flex;gap:8px;align-items:center}
+.tag{width:44px;color:var(--mute);font-size:14px}
+input[type=text]{flex:1;min-width:0;padding:10px;border:2px solid var(--line);border-radius:6px;background:var(--card);color:var(--ink);font:inherit}
+input[type=text].pick{border-color:var(--accent)}
+button{background:var(--accent);color:#000;border:0;border-radius:6px;padding:10px 14px;font:inherit;cursor:pointer}
+button.alt{background:var(--card);color:var(--ink);border:1px solid var(--line)}
+button:disabled{opacity:.45;cursor:default}
+#results{position:absolute;top:100%;left:8px;right:8px;z-index:1000;background:var(--card);border:1px solid var(--line);border-radius:6px;max-height:50vh;overflow:auto}
+#results div{padding:10px;border-bottom:1px solid var(--line);cursor:pointer}
+#results div:last-child{border-bottom:0}
+#results div:hover{background:var(--line)}
+.modes{display:flex;gap:6px}
+.modes button{flex:1;padding:8px 4px}
+.modes button.on{background:var(--accent);color:#000;border-color:var(--accent)}
+.me{width:0;height:0;margin:3px 5px;border-left:9px solid transparent;border-right:9px solid transparent;border-bottom:22px solid #1a73e8;transform-origin:50% 65%;filter:drop-shadow(0 0 2px #fff)}
+.me.dot{width:16px;height:16px;margin:6px;border:2px solid #fff;border-radius:50%;background:#1a73e8;transform:none}
+#map{flex:1;min-height:200px}
+#panel{padding:12px 16px;border-top:1px solid var(--line);background:var(--card)}
+#instr{font-size:22px;font-weight:600;min-height:30px}
+#then{color:var(--mute);font-size:16px;min-height:0}
+#sub{color:var(--mute);margin:2px 0 10px}
+.btns{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.btns label{color:var(--mute);font-size:14px;display:flex;gap:4px;align-items:center}
+select{padding:8px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--ink);font:inherit}
+#src{color:var(--mute);font-size:13px;margin-top:8px}
+</style>
+</head>
+<body>
+<div id="top">
+  <div class="fld"><span class="tag">From</span>
+    <input type="text" id="qf" placeholder="My location. Search or tap the map to change" autocomplete="off">
+    <button id="gof">Search</button></div>
+  <div class="fld"><span class="tag">To</span>
+    <input type="text" id="qt" placeholder="Search a destination, or tap the map" autocomplete="off">
+    <button id="got">Search</button></div>
+  <div class="modes" id="modes">
+    <button data-m="walk" class="alt">Walk</button>
+    <button data-m="car" class="alt on">Car</button>
+    <button data-m="bus" class="alt">Bus</button>
+    <button data-m="rail" class="alt">Rail</button>
+    <button data-m="flight" class="alt">Flight</button>
+  </div>
+  <div id="results" hidden></div>
+</div>
+<div id="map"></div>
+<div id="panel">
+  <div id="instr">Choose a destination</div>
+  <div id="then"></div>
+  <div id="sub"></div>
+  <div class="btns">
+    <button id="start" disabled>Start</button>
+    <button id="sim" class="alt" disabled>Simulate trip</button>
+    <select id="speed" title="Simulation speed">
+      <option value="1">1x</option><option value="4" selected>4x</option><option value="10">10x</option><option value="50">50x</option><option value="200">200x</option>
+    </select>
+    <button id="stop" class="alt" disabled>Stop</button>
+    <button id="clear" class="alt">Clear</button>
+    <button id="loc" class="alt" title="Use the browser location as the start">My location</button>
+    <label><input type="checkbox" id="voice" checked> Voice</label>
+  </div>
+  <div id="src">Position: waiting</div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="geo.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const map = L.map('map').setView([18.52, 73.86], 12);
+L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  maxZoom: 19,
+  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+}).addTo(map);
+
+const dot = (fill) => L.circleMarker([0, 0], { radius: 9, color: '#fff', weight: 2, fillColor: fill, fillOpacity: 1 });
+const me = L.marker([0, 0], { icon: L.divIcon({ className: '', html: '<div class="me dot"></div>', iconSize: [28, 28], iconAnchor: [14, 14] }), interactive: false, keyboard: false });
+const acc = L.circle([0, 0], { radius: 0, color: '#1a73e8', weight: 1, fillOpacity: 0.1 });
+const fromMarker = dot('#188038');
+const destMarker = dot('#d93025');
+let routeLine = null;
+
+const MODES = {
+  walk:   { simSpeed: 1.4, thresh: [100, 50, 20],  reroute: true,  defMult: '4' },
+  car:    { simSpeed: 14,  thresh: [500, 200, 50], reroute: true,  defMult: '4' },
+  bus:    { simSpeed: 11,  thresh: [500, 200, 50], reroute: true,  defMult: '4' },
+  rail:   { simSpeed: 25,  thresh: [2000, 500],    reroute: false, defMult: '10' },
+  flight: { simSpeed: 222, thresh: [],             reroute: false, defMult: '200' }
+};
+const NOTES = {
+  walk: '',
+  car: '',
+  bus: 'Road route a bus can take. Stops and timetables are not available, so no travel time is shown.',
+  rail: 'Follows railway tracks. Time is modeled from track speeds. It is not a timetable.',
+  flight: 'Direct path. Time is shown at ' + GEO.FLIGHT_KMH + ' km/h cruise. It is not a flight schedule.'
+};
+
+const S = {
+  pos: null,        // current position {lat, lon, acc, src}
+  dev: null,        // last browser location fix
+  from: null,       // chosen start {lat, lon, label}; null means My location
+  dest: null,       // chosen destination
+  pick: 'from',     // which field the next map tap fills
+  route: null,
+  mode: 'car',
+  guiding: false,
+  manual: false,    // position is pinned to the chosen start
+  simTimer: null,
+  sim: null,
+  idx: 0,
+  offCount: 0,
+  lastReroute: 0,
+  rerouting: false,
+  planning: false,
+  said: new Set(),
+  arrived: false
+};
+
+const NATIVE = () => {
+  const c = window.Capacitor;
+  return c && c.nativePromise && c.isNativePlatform && c.isNativePlatform() ? c : null;
+};
+
+function stopSpeech() {
+  const c = NATIVE();
+  if (c) { try { c.nativePromise('TextToSpeech', 'stop', {}).catch(() => {}); } catch (e) {} return; }
+  if ('speechSynthesis' in window) { try { speechSynthesis.cancel(); } catch (e) {} }
+}
+
+function say(text) {
+  if (!$('voice').checked || !S.guiding) return;
+  const c = NATIVE();
+  if (c) {   // Android and iOS app: use the phone's own speech engine
+    try {
+      c.nativePromise('TextToSpeech', 'speak', { text, lang: 'en-US', rate: 1.0, pitch: 1.0, volume: 1.0, category: 'ambient', queueStrategy: 1 })
+        .catch(() => {});
+    } catch (e) { /* voice must never break navigation */ }
+    return;
+  }
+  if (!('speechSynthesis' in window)) return;
+  try {
+    speechSynthesis.cancel();
+    speechSynthesis.speak(new SpeechSynthesisUtterance(text));
+  } catch (e) { /* voice must never break navigation */ }
+}
+
+function markPick() {
+  $('qf').classList.toggle('pick', S.pick === 'from');
+  $('qt').classList.toggle('pick', S.pick === 'to');
+  if (!S.route && !S.planning) {
+    $('instr').textContent = S.dest ? 'Choose a start point' : 'Choose a destination';
+    $('sub').textContent = 'Tap the map to set the ' + (S.pick === 'from' ? 'start point (From)' : 'destination (To)') +
+      ', or use the search boxes.';
+  }
+}
+
+// ---------- position sources ----------
+function onFix(f) {
+  if (f.src === 'device') S.dev = f;
+  if ((S.sim || S.manual) && f.src === 'device') return;   // simulation or chosen start overrides device
+  const prev = S.pos;
+  S.pos = f;
+  if (prev && GEO.hav([prev.lat, prev.lon], [f.lat, f.lon]) >= 3) S.heading = GEO.bearing([prev.lat, prev.lon], [f.lat, f.lon]);
+  me.setLatLng([f.lat, f.lon]).addTo(map);
+  const el = me.getElement() && me.getElement().firstChild;
+  if (el) {
+    const moving = S.heading !== undefined && (S.guiding || f.src === 'device');
+    el.classList.toggle('dot', !moving);
+    el.style.transform = moving ? 'rotate(' + S.heading + 'deg)' : 'none';
+  }
+  acc.setLatLng([f.lat, f.lon]).setRadius(f.acc || 0).addTo(map);
+  $('src').textContent = 'Position: ' + (f.src === 'sim' ? 'simulated' : f.src === 'manual' ? 'start point you chose' : 'browser location') +
+    (f.acc ? ', accuracy ' + Math.round(f.acc) + ' m' : '') +
+    (f.src === 'device' ? '. Browser location does not report NavIC. The Android app will.' : '');
+  if (S.guiding) map.setView([f.lat, f.lon], Math.max(map.getZoom(), 16), { animate: false });
+  if (S.route) guide();
+  else if (f.src === 'device' && S.dest && !S.from && !S.planning) plan();
+}
+
+function startDevice() {
+  if (!navigator.geolocation) { $('src').textContent = 'Position: this browser has no location support'; return; }
+  navigator.geolocation.watchPosition(
+    p => onFix({ lat: p.coords.latitude, lon: p.coords.longitude, acc: p.coords.accuracy, src: 'device' }),
+    e => { $('src').textContent = 'Position: ' + e.message + '. Set From by search or by tapping the map.'; },
+    { enableHighAccuracy: true, maximumAge: 1000, timeout: 20000 }
+  );
+}
+
+// ---------- search ----------
+async function search(kind) {
+  const input = $(kind === 'from' ? 'qf' : 'qt');
+  const q = input.value.trim();
+  if (!q) return;
+  const box = $('results');
+  box.hidden = false; box.textContent = 'Searching...';
+  try {
+    const url = 'https://nominatim.openstreetmap.org/search?format=jsonv2&limit=6&accept-language=en&q=' + encodeURIComponent(q);
+    const r = await fetch(url);
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const j = await r.json();
+    box.textContent = '';
+    if (!j.length) { box.textContent = 'No results'; return; }
+    for (const f of j) {
+      const d = document.createElement('div');
+      d.textContent = f.display_name;
+      d.onclick = () => { box.hidden = true; setPoint(kind, parseFloat(f.lat), parseFloat(f.lon), f.display_name); };
+      box.appendChild(d);
+    }
+  } catch (e) { box.textContent = 'Search failed: ' + e.message; }
+}
+
+// ---------- routing ----------
+async function getJson(url) {
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), 20000);
+  try {
+    const r = await fetch(url, { signal: ctl.signal });
+    return await r.json();
+  } finally { clearTimeout(t); }
+}
+
+async function fetchRoute(from, to, mode) {
+  const pair = from[1] + ',' + from[0] + ';' + to[1] + ',' + to[0];
+  const osrmQ = '?overview=full&geometries=geojson&steps=true';
+  let raw;
+  if (mode === 'flight') {
+    raw = GEO.flightRoute(from, to);
+  } else if (mode === 'rail') {
+    const j = await getJson('https://routing.openrailrouting.org/route?point=' + from[0] + ',' + from[1] +
+      '&point=' + to[0] + ',' + to[1] + '&profile=all_tracks&points_encoded=false&instructions=true&locale=en');
+    if (!j.paths || !j.paths.length) throw new Error(j.message || 'No railway route between these points');
+    raw = GEO.railRoute(j.paths[0]);
+  } else {
+    const base = mode === 'walk'
+      ? 'https://routing.openstreetmap.de/routed-foot/route/v1/driving/'
+      : 'https://router.project-osrm.org/route/v1/driving/';
+    const j = await getJson(base + pair + osrmQ);
+    if (j.code !== 'Ok' || !j.routes.length) throw new Error(j.message || j.code);
+    raw = j.routes[0];
+  }
+  const R = GEO.buildRoute(raw);
+  R.mode = mode;
+  R.noTime = mode === 'bus';
+  return R;
+}
+
+function drawRoute() {
+  if (routeLine) map.removeLayer(routeLine);
+  if (S.route.mode === 'flight') {   // keep the pin on the same world copy as the line end
+    const end = S.route.coords[S.route.coords.length - 1];
+    destMarker.setLatLng([S.dest.lat, end[1]]);
+  }
+  routeLine = L.polyline(S.route.coords, { color: '#1a73e8', weight: 6, opacity: 0.85, dashArray: S.route.mode === 'flight' ? '10 10' : null }).addTo(map);
+}
+
+function clearRoute() {
+  stopSim();
+  S.guiding = false; S.arrived = false; S.route = null;
+  stopSpeech();
+  if (routeLine) { map.removeLayer(routeLine); routeLine = null; }
+  $('start').disabled = $('sim').disabled = $('stop').disabled = true;
+}
+
+async function setPoint(kind, lat, lon, label) {
+  const lbl = label || lat.toFixed(5) + ', ' + lon.toFixed(5);
+  clearRoute();
+  if (kind === 'from') {
+    S.from = { lat, lon, label: lbl };
+    S.manual = true;
+    $('qf').value = lbl;
+    fromMarker.setLatLng([lat, lon]).addTo(map);
+    onFix({ lat, lon, acc: 5, src: 'manual' });
+    S.pick = 'to';
+    if (!S.dest) map.setView([lat, lon], 14);
+  } else {
+    S.dest = { lat, lon, label: lbl };
+    $('qt').value = lbl;
+    destMarker.setLatLng([lat, lon]).addTo(map);
+    if (!S.from && !S.pos) S.pick = 'from';
+  }
+  markPick();
+  await plan();
+}
+
+async function plan() {
+  if (S.planning) return;
+  if (!S.dest) { markPick(); return; }
+  const origin = S.from ? [S.from.lat, S.from.lon] : S.pos ? [S.pos.lat, S.pos.lon] : null;
+  if (!origin) { S.pick = 'from'; markPick(); return; }
+  S.planning = true;
+  $('instr').textContent = 'Finding route...';
+  $('sub').textContent = '';
+  try {
+    S.route = await fetchRoute(origin, [S.dest.lat, S.dest.lon], S.mode);
+  } catch (e) {
+    S.route = null;
+    $('instr').textContent = 'No route found';
+    $('sub').textContent = e.message;
+    S.planning = false;
+    return;
+  }
+  S.planning = false;
+  S.idx = 0; S.said.clear(); S.arrived = false; S.offCount = 0;
+  drawRoute();
+  map.fitBounds(routeLine.getBounds(), { padding: [30, 30] });
+  showSummary();
+}
+
+function showSummary() {
+  $('then').textContent = '';
+  if (!S.route) return;
+  $('start').disabled = $('sim').disabled = $('stop').disabled = false;
+  $('instr').textContent = GEO.fmtDist(S.route.distance) + (S.route.noTime ? '' : ', ' + GEO.fmtTime(S.route.duration));
+  const from = S.from ? S.from.label : 'your location';
+  $('sub').textContent = 'From ' + from + ' to ' + S.dest.label + '. ' + (NOTES[S.mode] ? NOTES[S.mode] + ' ' : '') + 'Press Start or Simulate trip.';
+}
+
+async function reroute() {
+  const now = Date.now();
+  if (!MODES[S.mode].reroute || S.rerouting || now - S.lastReroute < 15000 || !S.pos || !S.dest) return;
+  S.rerouting = true; S.lastReroute = now;
+  say('Rerouting');
+  $('instr').textContent = 'Rerouting...';
+  try {
+    const r = await fetchRoute([S.pos.lat, S.pos.lon], [S.dest.lat, S.dest.lon], S.mode);
+    S.route = r; S.idx = 0; S.said.clear(); S.offCount = 0;
+    drawRoute();
+    if (S.sim) S.sim.along = 0;   // simulation restarts on the new route
+  } catch (e) { $('sub').textContent = 'Reroute failed: ' + e.message; }
+  S.rerouting = false;
+}
+
+// ---------- guidance ----------
+
+function guide() {
+  const R = S.route, p = S.pos;
+  if (!R || !p || S.rerouting) return;
+  const pr = GEO.project(R, [p.lat, p.lon], S.idx);
+  S.idx = pr.idx;
+  const along = pr.along * R.scale;
+  const remaining = Math.max(0, R.distance - along);
+
+  if (MODES[S.mode].reroute && pr.d > Math.max(40, (p.acc || 0) * 1.5)) {
+    if (++S.offCount >= 3 && S.guiding) { reroute(); return; }
+  } else S.offCount = 0;
+
+  if (S.arrived) return;
+  if (remaining < 25 && S.guiding) {
+    S.arrived = true;
+    $('instr').textContent = 'You have arrived';
+    $('sub').textContent = S.dest.label;
+    say('You have arrived at your destination');
+    if (S.simTimer) { clearInterval(S.simTimer); S.simTimer = null; }
+    return;
+  }
+  if (!S.guiding) return;
+
+  const i = GEO.stepIndex(R, along);
+  const next = R.steps[i + 1];
+  const text = next ? GEO.describe(next) : GEO.describe(R.steps[i]);
+  const after = R.steps[i + 2];
+  const gap = after ? R.starts[i + 2] - R.starts[i + 1] : Infinity;
+  const thenText = after && gap < 150 ? GEO.describe(after) : '';
+  $('then').textContent = thenText ? 'Then ' + GEO.arrowFor(after) + ' ' + thenText + ' (' + GEO.fmtDist(gap) + ' later)' : '';
+  const toNext = next ? R.starts[i + 1] - along : remaining;
+  $('instr').textContent = (next ? GEO.arrowFor(next) : GEO.arrowFor(R.steps[i])) + ' ' + GEO.fmtDist(toNext) + ': ' + text;
+  if (R.noTime) {
+    $('sub').textContent = GEO.fmtDist(remaining) + ' left';
+  } else {
+    const secs = R.duration * (remaining / R.distance);
+    const eta = new Date(Date.now() + secs * 1000);
+    $('sub').textContent = GEO.fmtDist(remaining) + ' left, ' + GEO.fmtTime(secs) + ', arrive ' +
+      eta.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + (R.mode === 'car' || R.mode === 'walk' ? '' : ' (estimate)');
+  }
+
+  if (!next) return;
+  const TH = MODES[S.mode].thresh;
+  const hit = TH.filter(t => toNext <= t);
+  if (!hit.length) return;
+  const t = Math.max(...hit);
+  const key = (i + 1) + ':' + t;
+  const spoken = toNext < 1000 ? Math.max(10, Math.round(toNext / 10) * 10) : Math.round(toNext / 100) * 100;
+  if (S.said.has(key)) return;
+  TH.filter(x => x >= t).forEach(x => S.said.add((i + 1) + ':' + x));
+  if (next.maneuver && next.maneuver.type === 'arrive') {
+    say(t <= 50 ? 'Your destination is ahead' : 'Your destination is in ' + GEO.fmtDist(spoken));
+  } else {
+    const tail = thenText ? ', then ' + thenText : '';
+    say((t <= 50 ? text : 'In ' + GEO.fmtDist(spoken) + ', ' + text) + tail);
+  }
+}
+
+function start() {
+  if (!S.route) return;
+  S.guiding = true; S.arrived = false; S.said.clear();
+  if (S.pos) map.setView([S.pos.lat, S.pos.lon], 16);
+  say(GEO.describe(S.route.steps[0]));
+  guide();
+}
+
+function simulate() {
+  if (!S.route) return;
+  stopSim();
+  S.sim = { along: 0 };
+  S.guiding = true; S.arrived = false; S.said.clear(); S.idx = 0;
+  say(GEO.describe(S.route.steps[0]));
+  S.simTimer = setInterval(() => {
+    const v = MODES[S.mode].simSpeed * Number($('speed').value);   // meters per second
+    S.sim.along = Math.min(S.route.total, S.sim.along + v * 0.5);
+    const pt = GEO.pointAt(S.route, S.sim.along);
+    onFix({ lat: pt[0], lon: pt[1], acc: 5, src: 'sim' });
+    if (S.sim && S.sim.along >= S.route.total) { clearInterval(S.simTimer); S.simTimer = null; }
+  }, 500);
+}
+
+function stopSim() {
+  if (S.simTimer) clearInterval(S.simTimer);
+  S.simTimer = null; S.sim = null;
+}
+
+// Stop guidance but keep the points and the route.
+function stopGuidance() {
+  stopSim();
+  S.guiding = false; S.arrived = false; S.said.clear(); S.idx = 0; S.heading = undefined;
+  stopSpeech();
+  if (S.from) onFix({ lat: S.from.lat, lon: S.from.lon, acc: 5, src: 'manual' });
+  showSummary();
+  if (S.route) map.fitBounds(routeLine.getBounds(), { padding: [30, 30] });
+}
+
+function clearAll() {
+  clearRoute();
+  S.from = null; S.dest = null; S.manual = false; S.pick = 'from';
+  map.removeLayer(fromMarker); map.removeLayer(destMarker);
+  $('qf').value = ''; $('qt').value = '';
+  markPick();
+}
+
+function useMyLocation() {
+  clearRoute();
+  S.from = null; S.manual = false;
+  map.removeLayer(fromMarker);
+  $('qf').value = '';
+  S.pos = null;
+  $('src').textContent = 'Position: waiting for browser location';
+  if (S.dev) onFix(S.dev);
+  if (S.dest) plan(); else { S.pick = 'to'; markPick(); }
+}
+
+function setMode(m) {
+  if (m === S.mode) return;
+  S.mode = m;
+  document.querySelectorAll('#modes button').forEach(b => b.classList.toggle('on', b.dataset.m === m));
+  $('speed').value = MODES[m].defMult;
+  clearRoute();
+  if (S.dest) plan(); else markPick();
+}
+document.querySelectorAll('#modes button').forEach(b => { b.onclick = () => setMode(b.dataset.m); });
+$('gof').onclick = () => search('from');
+$('got').onclick = () => search('to');
+$('qf').onkeydown = e => { if (e.key === 'Enter') search('from'); };
+$('qt').onkeydown = e => { if (e.key === 'Enter') search('to'); };
+$('qf').onfocus = () => { S.pick = 'from'; markPick(); };
+$('qt').onfocus = () => { S.pick = 'to'; markPick(); };
+$('qf').oninput = () => { if (!$('qf').value.trim() && S.from) useMyLocation(); };
+$('start').onclick = start;
+$('sim').onclick = simulate;
+$('stop').onclick = stopGuidance;
+$('clear').onclick = clearAll;
+$('loc').onclick = useMyLocation;
+map.on('click', e => { $('results').hidden = true; setPoint(S.pick, e.latlng.lat, e.latlng.lng); });
+map.on('contextmenu', e => setPoint('from', e.latlng.lat, e.latlng.lng));
+markPick();
+startDevice();
+</script>
+</body>
+</html>
