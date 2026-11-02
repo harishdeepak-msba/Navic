@@ -709,7 +709,10 @@ byId('aRenameBtn').onclick = () => {
   window.NavicAuth.setUsername(n).then(() => { byId('aRename').value = ''; acctMsg('Username changed.'); }).catch(e => acctMsg(e.message));
 };
 byId('aShare').onchange = e => {
-  window.NavicAuth.setShareLocation(e.target.checked).catch(err => { acctMsg(err.message); e.target.checked = !e.target.checked; });
+  window.NavicAuth.setShareLocation(e.target.checked).then(() => {
+    // Send a location right away instead of waiting for the next GPS update.
+    if (e.target.checked && S.dev) window.NavicAuth.pushLocation(S.dev.lat, S.dev.lon);
+  }).catch(err => { acctMsg(err.message); e.target.checked = !e.target.checked; });
 };
 byId('aAddBtn').onclick = () => {
   const n = byId('aAddName').value.trim(); if (!n) return;
