@@ -653,7 +653,7 @@ function renderAccount(st) {
       wanted.add(f.uid);
       if (!friendMarkers[f.uid]) {
         friendMarkers[f.uid] = L.circleMarker([f.lat, f.lon], { radius: 8, color: '#fff', weight: 2, fillColor: '#8e24aa', fillOpacity: 1 })
-          .bindTooltip(f.username || 'Friend', { permanent: true, direction: 'top', offset: [0, -8] }).addTo(map);
+          .bindTooltip(f.username || 'Friend', { permanent: true, direction: 'right', offset: [10, 0], opacity: 1 }).addTo(map);
       } else {
         friendMarkers[f.uid].setLatLng([f.lat, f.lon]);
       }
