@@ -234,7 +234,10 @@ function markPick() {
 
 // ---------- position sources ----------
 function onFix(f) {
-  if (f.src === 'device') S.dev = f;
+  if (f.src === 'device') {
+    S.dev = f;
+    if (window.NavicAuth) window.NavicAuth.pushLocation(f.lat, f.lon);   // share real device position, not a test route
+  }
   if ((S.sim || S.manual) && f.src === 'device') return;   // simulation or chosen start overrides device
   const prev = S.pos;
   S.pos = f;
@@ -253,7 +256,6 @@ function onFix(f) {
   if (S.guiding) map.setView([f.lat, f.lon], Math.max(map.getZoom(), 16), { animate: false });
   if (S.route) guide();
   else if (f.src === 'device' && S.dest && !S.from && !S.planning) plan();
-  if (window.NavicAuth) window.NavicAuth.pushLocation(f.lat, f.lon);
 }
 
 function startDevice() {
