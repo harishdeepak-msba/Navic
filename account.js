@@ -76,6 +76,7 @@ function watchLinks(uid) {
     accepted.forEach(f => {
       if (friendUnsubs[f.uid]) return;
       friendUnsubs[f.uid] = onSnapshot(doc(db, 'users', f.uid), s => {
+        console.log('[navic] friend doc update for', f.username, s.exists() ? s.data() : '(missing)');
         const row = current.friends.find(x => x.uid === f.uid);
         if (!row) return;
         if (s.exists() && s.data().shareLocation) {
@@ -84,7 +85,8 @@ function watchLinks(uid) {
           row.lat = null; row.lon = null; row.sharing = false;
         }
         emit();
-      }, () => { /* no access: friend turned sharing off, rule denies read */
+      }, e => { /* no access: friend turned sharing off, rule denies read */
+        console.log('[navic] friend doc read FAILED for', f.username, e.code || e.message || e);
         const row = current.friends.find(x => x.uid === f.uid);
         if (row) { row.lat = null; row.lon = null; row.sharing = false; emit(); }
       });
@@ -188,19 +190,25 @@ window.NavicAuth = {
   },
 
   async setShareLocation(on) {
+    console.log('[navic] setShareLocation called with', on);
     const user = auth.currentUser; if (!user) throw new Error('Not signed in.');
     current.shareLocation = on;
     await setDoc(doc(db, 'users', user.uid), { shareLocation: on }, { merge: true });
+    console.log('[navic] setShareLocation write OK');
     if (!on) await updateDoc(doc(db, 'users', user.uid), { lat: null, lon: null }).catch(() => {});
     emit();
   },
 
   async pushLocation(lat, lon) {
     const user = auth.currentUser;
-    if (!user || !current.shareLocation) return;
+    if (!user) { console.log('[navic] pushLocation skipped: not signed in'); return; }
+    if (!current.shareLocation) { console.log('[navic] pushLocation skipped: sharing is off'); return; }
     const now = Date.now();
-    if (now - lastPushAt < 8000) return;   // write at most once every 8 seconds
+    if (now - lastPushAt < 8000) { console.log('[navic] pushLocation skipped: throttled'); return; }
     lastPushAt = now;
-    await setDoc(doc(db, 'users', user.uid), { lat, lon, updatedAt: serverTimestamp() }, { merge: true }).catch(() => {});
+    console.log('[navic] pushLocation writing', lat, lon);
+    await setDoc(doc(db, 'users', user.uid), { lat, lon, updatedAt: serverTimestamp() }, { merge: true })
+      .then(() => console.log('[navic] pushLocation OK'))
+      .catch(e => console.log('[navic] pushLocation FAILED', e.code || e.message || e));
   }
 };
