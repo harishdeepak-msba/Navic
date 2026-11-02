@@ -44,6 +44,21 @@ select{padding:8px;border:1px solid var(--line);border-radius:6px;background:var
 #panel.nav .btns>:not(#stop){display:none}
 #panel.nav #src{display:none}
 #sats{color:var(--mute);font-size:13px;margin-top:4px}
+#acctBtn{position:absolute;top:8px;right:8px;z-index:900;width:36px;height:36px;border-radius:50%;background:var(--accent);color:#000;border:0;font:16px/36px sans-serif;cursor:pointer;text-align:center;padding:0}
+#acctPanel{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:2000;display:none}
+#acctPanel.open{display:flex;align-items:flex-end}
+#acctBox{background:var(--card);color:var(--ink);width:100%;max-height:85vh;overflow:auto;border-radius:14px 14px 0 0;padding:16px}
+#acctBox h3{margin:14px 0 6px;font-size:15px;color:var(--mute)}
+#acctBox h3:first-child{margin-top:0}
+#acctBox input[type=text],#acctBox input[type=email],#acctBox input[type=password]{width:100%;padding:9px;margin:4px 0;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--ink);font:inherit}
+#acctBox .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+#acctBox .row button{padding:8px 12px}
+#acctClose{float:right;background:none;border:0;color:var(--mute);font-size:20px;cursor:pointer;padding:0 6px}
+#acctMsg{color:var(--accent);font-size:14px;min-height:18px}
+.frow{display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--line)}
+.frow:last-child{border-bottom:0}
+.frow small{color:var(--mute)}
+
 </style>
 </head>
 <body>
@@ -64,7 +79,47 @@ select{padding:8px;border:1px solid var(--line);border-radius:6px;background:var
   <div id="bar"><span id="barText"></span><button id="edit" class="alt">Edit</button></div>
   <div id="results" hidden></div>
 </div>
+<button id="acctBtn" title="Account">&#9776;</button>
 <div id="map"></div>
+<div id="acctPanel"><div id="acctBox">
+  <button id="acctClose">&times;</button>
+  <div id="acctMsg"></div>
+  <div id="acctSignedOut">
+    <h3>Sign in</h3>
+    <input type="email" id="aEmail" placeholder="Email" autocomplete="username">
+    <input type="password" id="aPass" placeholder="Password" autocomplete="current-password">
+    <div class="row"><button id="aSignIn">Sign in</button><button id="aForgot" class="alt">Forgot password</button></div>
+    <h3>Create account</h3>
+    <input type="email" id="aEmail2" placeholder="Email" autocomplete="username">
+    <input type="password" id="aPass2" placeholder="Password, 6 characters or more" autocomplete="new-password">
+    <input type="text" id="aName2" placeholder="Pick a username (letters, numbers, _)">
+    <div class="row"><button id="aSignUp">Create account</button></div>
+  </div>
+  <div id="acctSignedIn" hidden>
+    <h3>Signed in as</h3>
+    <div class="row"><strong id="aMeName"></strong></div>
+    <div class="row"><input type="text" id="aRename" placeholder="New username"><button id="aRenameBtn" class="alt">Change name</button></div>
+    <h3>Share my location with friends</h3>
+    <label class="row"><input type="checkbox" id="aShare"> Share my live location with accepted friends</label>
+    <h3>Add a friend</h3>
+    <div class="row"><input type="text" id="aAddName" placeholder="Their username"><button id="aAddBtn">Send request</button></div>
+    <h3>Requests waiting for you</h3>
+    <div id="aIncoming"></div>
+    <h3>Requests you sent</h3>
+    <div id="aOutgoing"></div>
+    <h3>Your friends</h3>
+    <div id="aFriends"></div>
+    <h3>Change password</h3>
+    <input type="password" id="aCurPass" placeholder="Current password" autocomplete="current-password">
+    <input type="password" id="aNewPass" placeholder="New password" autocomplete="new-password">
+    <div class="row"><button id="aChangePass" class="alt">Change password</button></div>
+    <h3>Account</h3>
+    <div class="row"><button id="aSignOut" class="alt">Sign out</button></div>
+    <input type="password" id="aDelPass" placeholder="Current password, to confirm deletion" autocomplete="current-password">
+    <div class="row"><button id="aDelBtn" class="alt">Delete my account</button></div>
+  </div>
+</div></div>
+
 <div id="panel">
   <div id="instr">Choose a destination</div>
   <div id="then"></div>
@@ -86,9 +141,11 @@ select{padding:8px;border:1px solid var(--line);border-radius:6px;background:var
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="geo.js"></script>
+<script type="module" src="account.js"></script>
 <script>
 const $ = id => document.getElementById(id);
 const map = L.map('map').setView([18.52, 73.86], 12);
+map.getContainer().appendChild($('acctBtn'));
 L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
   maxZoom: 19,
   attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
@@ -196,6 +253,7 @@ function onFix(f) {
   if (S.guiding) map.setView([f.lat, f.lon], Math.max(map.getZoom(), 16), { animate: false });
   if (S.route) guide();
   else if (f.src === 'device' && S.dest && !S.from && !S.planning) plan();
+  if (window.NavicAuth) window.NavicAuth.pushLocation(f.lat, f.lon);
 }
 
 function startDevice() {
@@ -545,6 +603,117 @@ map.on('contextmenu', e => setPoint('from', e.latlng.lat, e.latlng.lng));
 markPick();
 startDevice();
 startSats();
+// ---------- account & friends ----------
+const friendMarkers = {};
+let lastPush = 0;
+
+function byId(id) { return document.getElementById(id); }
+
+function renderAccount(st) {
+  const signedIn = !!st.user;
+  byId('acctSignedOut').hidden = signedIn;
+  byId('acctSignedIn').hidden = !signedIn;
+  if (signedIn) {
+    byId('aMeName').textContent = st.username || '(no username set)';
+    byId('aShare').checked = !!st.shareLocation;
+    byId('aIncoming').innerHTML = '';
+    st.incoming.forEach(r => {
+      const d = document.createElement('div'); d.className = 'frow';
+      d.innerHTML = '<span>' + (r.username || r.uid) + '</span>';
+      const accept = document.createElement('button'); accept.textContent = 'Accept';
+      accept.onclick = () => window.NavicAuth.acceptRequest(r.uid).catch(e => acctMsg(e.message));
+      const decline = document.createElement('button'); decline.className = 'alt'; decline.textContent = 'Decline';
+      decline.onclick = () => window.NavicAuth.removeFriend(r.uid).catch(e => acctMsg(e.message));
+      d.appendChild(accept); d.appendChild(decline);
+      byId('aIncoming').appendChild(d);
+    });
+    byId('aOutgoing').innerHTML = '';
+    st.outgoing.forEach(r => {
+      const d = document.createElement('div'); d.className = 'frow';
+      d.innerHTML = '<span>' + (r.username || r.uid) + ' <small>waiting</small></span>';
+      const cancel = document.createElement('button'); cancel.className = 'alt'; cancel.textContent = 'Cancel';
+      cancel.onclick = () => window.NavicAuth.removeFriend(r.uid).catch(e => acctMsg(e.message));
+      d.appendChild(cancel);
+      byId('aOutgoing').appendChild(d);
+    });
+    byId('aFriends').innerHTML = '';
+    st.friends.forEach(f => {
+      const d = document.createElement('div'); d.className = 'frow';
+      d.innerHTML = '<span>' + (f.username || f.uid) + ' <small>' + (f.sharing ? 'sharing location' : 'not sharing right now') + '</small></span>';
+      const remove = document.createElement('button'); remove.className = 'alt'; remove.textContent = 'Remove';
+      remove.onclick = () => window.NavicAuth.removeFriend(f.uid).catch(e => acctMsg(e.message));
+      d.appendChild(remove);
+      byId('aFriends').appendChild(d);
+    });
+  }
+  // friend markers on map
+  const wanted = new Set();
+  st.friends.forEach(f => {
+    if (f.sharing && f.lat != null && f.lon != null) {
+      wanted.add(f.uid);
+      if (!friendMarkers[f.uid]) {
+        friendMarkers[f.uid] = L.circleMarker([f.lat, f.lon], { radius: 8, color: '#fff', weight: 2, fillColor: '#8e24aa', fillOpacity: 1 })
+          .bindTooltip(f.username || 'Friend', { permanent: true, direction: 'top', offset: [0, -8] }).addTo(map);
+      } else {
+        friendMarkers[f.uid].setLatLng([f.lat, f.lon]);
+      }
+    }
+  });
+  Object.keys(friendMarkers).forEach(uid => {
+    if (!wanted.has(uid)) { map.removeLayer(friendMarkers[uid]); delete friendMarkers[uid]; }
+  });
+}
+
+function acctMsg(t) { byId('acctMsg').textContent = t || ''; }
+
+byId('acctBtn').onclick = () => { byId('acctPanel').classList.add('open'); acctMsg(''); };
+byId('acctClose').onclick = () => byId('acctPanel').classList.remove('open');
+
+byId('aSignIn').onclick = () => {
+  acctMsg('');
+  window.NavicAuth.signIn(byId('aEmail').value.trim(), byId('aPass').value)
+    .then(() => acctMsg('')).catch(e => acctMsg(e.message));
+};
+byId('aForgot').onclick = () => {
+  const addr = byId('aEmail').value.trim();
+  if (!addr) { acctMsg('Enter your email above first.'); return; }
+  window.NavicAuth.resetPassword(addr).then(() => acctMsg('Password reset email sent.')).catch(e => acctMsg(e.message));
+};
+byId('aSignUp').onclick = () => {
+  acctMsg('');
+  window.NavicAuth.signUp(byId('aEmail2').value.trim(), byId('aPass2').value, byId('aName2').value)
+    .then(() => acctMsg('')).catch(e => acctMsg(e.message));
+};
+byId('aRenameBtn').onclick = () => {
+  const n = byId('aRename').value.trim(); if (!n) return;
+  window.NavicAuth.setUsername(n).then(() => { byId('aRename').value = ''; acctMsg('Username changed.'); }).catch(e => acctMsg(e.message));
+};
+byId('aShare').onchange = e => {
+  window.NavicAuth.setShareLocation(e.target.checked).catch(err => { acctMsg(err.message); e.target.checked = !e.target.checked; });
+};
+byId('aAddBtn').onclick = () => {
+  const n = byId('aAddName').value.trim(); if (!n) return;
+  window.NavicAuth.addFriend(n).then(() => { byId('aAddName').value = ''; acctMsg('Request sent.'); }).catch(e => acctMsg(e.message));
+};
+byId('aChangePass').onclick = () => {
+  window.NavicAuth.changePassword(byId('aCurPass').value, byId('aNewPass').value)
+    .then(() => { byId('aCurPass').value = ''; byId('aNewPass').value = ''; acctMsg('Password changed.'); })
+    .catch(e => acctMsg(e.message));
+};
+byId('aSignOut').onclick = () => window.NavicAuth.signOut().catch(e => acctMsg(e.message));
+byId('aDelBtn').onclick = () => {
+  if (!confirm('This permanently deletes your account, username, and friend links. Continue?')) return;
+  window.NavicAuth.deleteAccount(byId('aDelPass').value)
+    .then(() => { byId('acctPanel').classList.remove('open'); })
+    .catch(e => acctMsg(e.message));
+};
+
+function waitForAuth() {
+  if (window.NavicAuth) { window.NavicAuth.onState(renderAccount); }
+  else setTimeout(waitForAuth, 100);
+}
+waitForAuth();
+
 </script>
 </body>
 </html>
