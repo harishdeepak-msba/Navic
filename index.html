@@ -19,6 +19,10 @@ input[type=text].pick{border-color:var(--accent)}
 button{background:var(--accent);color:#000;border:0;border-radius:6px;padding:10px 14px;font:inherit;cursor:pointer}
 button.alt{background:var(--card);color:var(--ink);border:1px solid var(--line)}
 button:disabled{opacity:.45;cursor:default}
+#bar{display:none;gap:8px;align-items:center}
+#bar span{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:600}
+#top.compact .fld,#top.compact .modes{display:none}
+#top.compact #bar{display:flex}
 #results{position:absolute;top:100%;left:8px;right:8px;z-index:1000;background:var(--card);border:1px solid var(--line);border-radius:6px;max-height:50vh;overflow:auto}
 #results div{padding:10px;border-bottom:1px solid var(--line);cursor:pointer}
 #results div:last-child{border-bottom:0}
@@ -37,6 +41,8 @@ button:disabled{opacity:.45;cursor:default}
 .btns label{color:var(--mute);font-size:14px;display:flex;gap:4px;align-items:center}
 select{padding:8px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--ink);font:inherit}
 #src{color:var(--mute);font-size:13px;margin-top:8px}
+#panel.nav .btns>:not(#stop){display:none}
+#panel.nav #src{display:none}
 #sats{color:var(--mute);font-size:13px;margin-top:4px}
 </style>
 </head>
@@ -55,6 +61,7 @@ select{padding:8px;border:1px solid var(--line);border-radius:6px;background:var
     <button data-m="rail" class="alt">Rail</button>
     <button data-m="flight" class="alt">Flight</button>
   </div>
+  <div id="bar"><span id="barText"></span><button id="edit" class="alt">Edit</button></div>
   <div id="results" hidden></div>
 </div>
 <div id="map"></div>
@@ -229,12 +236,21 @@ async function search(kind) {
   const box = $('results');
   box.hidden = false; box.textContent = 'Searching...';
   try {
-    const url = 'https://nominatim.openstreetmap.org/search?format=jsonv2&limit=6&accept-language=en&q=' + encodeURIComponent(q);
-    const r = await fetch(url);
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    const j = await r.json();
+    const swap = t => t.replace(/\b(centre|center)\b/gi, m => m.toLowerCase() === 'centre' ? (m[0] === 'C' ? 'Center' : 'center') : (m[0] === 'C' ? 'Centre' : 'centre'));
+    const noComma = t => t.replace(/,/g, ' ').replace(/\s+/g, ' ').trim();
+    const variants = [q, swap(q) !== q ? swap(q) : null, noComma(q), swap(noComma(q))].filter((v, i, a) => v && a.indexOf(v) === i);
+    let j = [], used = q;
+    for (const v of variants) {
+      if (v !== variants[0]) await new Promise(r => setTimeout(r, 1100));   // Nominatim allows 1 request per second
+      const url = 'https://nominatim.openstreetmap.org/search?format=jsonv2&limit=6&accept-language=en&q=' + encodeURIComponent(v);
+      const r = await fetch(url);
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      j = await r.json();
+      if (j.length) { used = v; break; }
+    }
     box.textContent = '';
-    if (!j.length) { box.textContent = 'No results'; return; }
+    if (!j.length) { box.textContent = 'No results. Try a place name with the city, or tap the map.'; return; }
+    if (used !== q) { const n = document.createElement('div'); n.style.color = 'var(--mute)'; n.textContent = 'Showing results for: ' + used; box.appendChild(n); }
     for (const f of j) {
       const d = document.createElement('div');
       d.textContent = f.display_name;
@@ -288,7 +304,20 @@ function drawRoute() {
   routeLine = L.polyline(S.route.coords, { color: '#1a73e8', weight: 6, opacity: 0.85, dashArray: S.route.mode === 'flight' ? '10 10' : null }).addTo(map);
 }
 
+function setNav(on) {
+  $('panel').classList.toggle('nav', on);
+  setTimeout(() => { map.invalidateSize(); if (on && S.pos) map.setView([S.pos.lat, S.pos.lon], map.getZoom()); }, 80);
+}
+
+function setCompact(on) {
+  $('top').classList.toggle('compact', on);
+  if (on) $('results').hidden = true;
+  setTimeout(() => map.invalidateSize(), 50);
+}
+
 function clearRoute() {
+  setCompact(false);
+  setNav(false);
   stopSim();
   S.guiding = false; S.arrived = false; S.route = null;
   stopSpeech();
@@ -347,6 +376,10 @@ function showSummary() {
   $('start').disabled = $('sim').disabled = $('stop').disabled = false;
   $('instr').textContent = GEO.fmtDist(S.route.distance) + (S.route.noTime ? '' : ', ' + GEO.fmtTime(S.route.duration));
   const from = S.from ? S.from.label : 'your location';
+  const modeName = S.mode.charAt(0).toUpperCase() + S.mode.slice(1);
+  $('barText').textContent = modeName + ': ' + from + ' to ' + S.dest.label;
+  setCompact(true);
+  setTimeout(() => { map.invalidateSize(); if (routeLine) map.fitBounds(routeLine.getBounds(), { padding: [30, 30] }); }, 120);
   $('sub').textContent = 'From ' + from + ' to ' + S.dest.label + '. ' + (NOTES[S.mode] ? NOTES[S.mode] + ' ' : '') + 'Press Start or Simulate trip.';
 }
 
@@ -428,6 +461,7 @@ function guide() {
 function start() {
   if (!S.route) return;
   S.guiding = true; S.arrived = false; S.said.clear();
+  setNav(true);
   if (S.pos) map.setView([S.pos.lat, S.pos.lon], 16);
   say(GEO.describe(S.route.steps[0]));
   guide();
@@ -438,6 +472,7 @@ function simulate() {
   stopSim();
   S.sim = { along: 0 };
   S.guiding = true; S.arrived = false; S.said.clear(); S.idx = 0;
+  setNav(true);
   say(GEO.describe(S.route.steps[0]));
   S.simTimer = setInterval(() => {
     const v = MODES[S.mode].simSpeed * Number($('speed').value);   // meters per second
@@ -458,6 +493,7 @@ function stopGuidance() {
   stopSim();
   S.guiding = false; S.arrived = false; S.said.clear(); S.idx = 0; S.heading = undefined;
   stopSpeech();
+  setNav(false);
   if (S.from) onFix({ lat: S.from.lat, lon: S.from.lon, acc: 5, src: 'manual' });
   showSummary();
   if (S.route) map.fitBounds(routeLine.getBounds(), { padding: [30, 30] });
@@ -502,6 +538,7 @@ $('start').onclick = start;
 $('sim').onclick = simulate;
 $('stop').onclick = stopGuidance;
 $('clear').onclick = clearAll;
+$('edit').onclick = () => setCompact(false);
 $('loc').onclick = useMyLocation;
 map.on('click', e => { $('results').hidden = true; setPoint(S.pick, e.latlng.lat, e.latlng.lng); });
 map.on('contextmenu', e => setPoint('from', e.latlng.lat, e.latlng.lng));
